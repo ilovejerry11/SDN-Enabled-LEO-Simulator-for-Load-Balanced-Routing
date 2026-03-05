@@ -40,12 +40,28 @@
 #include "ns3/ipv4-arbiter-routing-helper.h"
 #include "ns3/gsl-if-bandwidth-helper.h"
 
+#include "ns3/log.h"
+
 using namespace ns3;
+
+NS_LOG_COMPONENT_DEFINE ("MainSatnet");
 
 int main(int argc, char *argv[]) {
 
     // No buffering of printf
     setbuf(stdout, nullptr);
+
+    // LogComponentEnable ("OpenFlowSwitchNetDevice", LOG_LEVEL_INFO);
+    // LogComponentEnable ("OpenFlowInterface", LOG_LEVEL_INFO);
+
+    // LogComponentEnable ("PointToPointLaserNetDevice", LOG_LEVEL_INFO);
+    // LogComponentEnable ("GSLNetDevice", LOG_LEVEL_INFO);
+    // LogComponentEnable ("PointToPointLaserChannel", LOG_LEVEL_INFO);
+    // LogComponentEnable ("GSLChannel", LOG_LEVEL_INFO);
+    // LogComponentEnable ("Ipv4ArbiterRouting", LOG_LEVEL_INFO);
+
+    // LogComponentEnable ("Ipv4L3Protocol", LOG_LEVEL_INFO);
+    // LogComponentEnable ("Node", LOG_LEVEL_INFO);
 
     // Retrieve run directory
     CommandLine cmd;
@@ -69,7 +85,7 @@ int main(int argc, char *argv[]) {
 
     // Read topology, and install routing arbiters
     Ptr<TopologySatelliteNetwork> topology = CreateObject<TopologySatelliteNetwork>(basicSimulation, Ipv4ArbiterRoutingHelper());
-    ArbiterSingleForwardHelper arbiterHelper(basicSimulation, topology->GetNodes());
+    ArbiterSingleForwardHelper arbiterHelper(basicSimulation, topology->GetNodes(), topology);
     GslIfBandwidthHelper gslIfBandwidthHelper(basicSimulation, topology->GetNodes());
 
     // Schedule flows

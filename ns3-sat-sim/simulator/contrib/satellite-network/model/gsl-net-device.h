@@ -25,6 +25,7 @@
 
 #include <cstring>
 #include <queue>
+#include <vector>
 #include "ns3/address.h"
 #include "ns3/node.h"
 #include "ns3/net-device.h"
@@ -183,6 +184,11 @@ public:
 
   virtual void SetPromiscReceiveCallback (PromiscReceiveCallback cb);
   virtual bool SupportsSendFrom (void) const;
+
+  // Utilization tracking
+  void EnableUtilizationTracking(int64_t interval_ns);
+  const std::vector<double>& FinalizeUtilization();
+  const std::vector<double>& GetUtilizationHistory() const;
 
 protected:
   /**
@@ -450,6 +456,18 @@ private:
   uint32_t m_mtu;
 
   Ptr<Packet> m_currentPkt; //!< Current packet processed
+
+  // Utilization tracking
+  bool m_utilization_tracking_enabled = false;
+  int64_t m_interval_ns;
+  int64_t m_prev_time_ns;
+  int64_t m_current_interval_start;
+  int64_t m_current_interval_end;
+  int64_t m_idle_time_counter_ns;
+  int64_t m_busy_time_counter_ns;
+  bool m_current_state_is_on;
+  std::vector<double> m_utilization;
+  void TrackUtilization(bool next_state_is_on);
 
   /**
    * \brief PPP to Ethernet protocol number mapping

@@ -32,8 +32,13 @@
 #include "ns3/uinteger.h"
 #include "ns3/pointer.h"
 #include "ns3/ppp-header.h"
+#include "ns3/openflow-switch-net-device.h"
 #include "point-to-point-laser-net-device.h"
 #include "point-to-point-laser-channel.h"
+
+#include "ns3/arp-cache.h"
+#include "ns3/ipv4-l3-protocol.h"
+#include "ns3/ipv4-interface.h"
 
 namespace ns3 {
 
@@ -340,7 +345,75 @@ void
 PointToPointLaserNetDevice::Receive (Ptr<Packet> packet)
 {
   NS_LOG_FUNCTION (this << packet);
+  NS_LOG_INFO ("--------------------------------------------");
+  NS_LOG_DEBUG ("[p2p] Node " << m_node->GetId() <<  ", netdev receive packet with UID " << packet->GetUid ());
   uint16_t protocol = 0;
+
+  // my experiment
+  // Extract destination IP before processing headers
+  // Ptr<Packet> packetCopy = packet->Copy();
+  
+  // Remove PPP header to get to IP layer
+  // PppHeader pppHeader;
+  // packetCopy->RemoveHeader(pppHeader);
+  // uint16_t etherType = PppToEther(pppHeader.GetProtocol());
+
+  // Ipv4Header ipv4Header;
+  // packetCopy->RemoveHeader(ipv4Header);
+  // Ipv4Address srcIp = ipv4Header.GetSource();
+  // Ipv4Address destIp = ipv4Header.GetDestination();
+  // NS_LOG_DEBUG ("IPv4 source IP: " << srcIp);
+  // NS_LOG_DEBUG ("IPv4 destination IP: " << destIp);
+
+  // Get destination MAC address from ARP cache using destination IP
+  // Address srcMac, destMac;
+  // bool foundSrcMac = false;
+  // bool foundDestMac = false;
+  
+  // Get the node and find the IPv4 interface for this device
+  // Ptr<Node> node = GetNode();
+  // if (node != nullptr) {
+  //   Ptr<Ipv4L3Protocol> ipv4 = node->GetObject<Ipv4L3Protocol>();
+  //   if (ipv4 != nullptr) {
+  //     // Find the interface index for this net device
+  //     int32_t interfaceIndex = ipv4->GetInterfaceForDevice(this);
+  //     if (interfaceIndex >= 0) {
+  //       Ptr<Ipv4Interface> ipv4Interface = ipv4->GetInterface(interfaceIndex);
+  //       if (ipv4Interface != nullptr) {
+  //         Ptr<ArpCache> arpCache = ipv4Interface->GetArpCache();
+  //         if (arpCache != nullptr) {
+  //           ArpCache::Entry* arpEntry = arpCache->Lookup(destIp);
+  //           ArpCache::Entry* arpSrcEntry = arpCache->Lookup(srcIp);
+  //           if (arpEntry != nullptr && arpEntry->IsAlive()) {
+  //             destMac = arpEntry->GetMacAddress();
+  //             foundDestMac = true;
+  //             NS_LOG_DEBUG ("Found destination MAC address from ARP cache: " << destMac);
+  //             srcMac = arpSrcEntry->GetMacAddress();
+  //             // NS_LOG_DEBUG ("Found source MAC address from ARP cache: " << srcMac);
+  //           } else {
+  //             NS_LOG_DEBUG ("ARP entry not found or not alive for IP: " << destIp);
+  //           }
+  //         } else {
+  //           NS_LOG_DEBUG ("ARP cache not found for interface");
+  //         }
+  //       } else {
+  //         NS_LOG_DEBUG ("IPv4 interface not found");
+  //       }
+  //     } else {
+  //       NS_LOG_DEBUG ("Interface index not found for this device");
+  //     }
+  //   } else {
+  //     NS_LOG_DEBUG ("IPv4L3Protocol not found on node");
+  //   }
+  // } else {
+  //   NS_LOG_DEBUG ("Node is null");
+  // }
+  
+  // if (!foundDestMac) {
+  //   NS_LOG_DEBUG ("Could not resolve destination MAC address for IP: " << destIp);
+  //   // Set to broadcast address as fallback
+  //   destMac = Mac48Address("ff:ff:ff:ff:ff:ff");
+  // }
 
   if (m_receiveErrorModel && m_receiveErrorModel->IsCorrupt (packet) ) 
     {
@@ -375,13 +448,18 @@ PointToPointLaserNetDevice::Receive (Ptr<Packet> packet)
       //
       ProcessHeader (packet, protocol);
 
-      if (!m_promiscCallback.IsNull ())
-        {
-          m_macPromiscRxTrace (originalPacket);
-          m_promiscCallback (this, packet, protocol, GetRemote (), GetAddress (), NetDevice::PACKET_HOST);
-        }
-
+      // if (!m_promiscCallback.IsNull ())
+      //   {
+      //     NS_LOG_DEBUG ("[p2p] Promiscuous callback is not null, calling it");
+      //     m_macPromiscRxTrace (originalPacket);
+      //     // TODO: src=source gs mac, dst=destination gs mac, packetType=PACKET_OTHERHOST
+      //     // m_promiscCallback (this, packet, protocol, GetRemote (), GetAddress (), NetDevice::PACKET_HOST);
+      //     m_promiscCallback (this, packet, protocol, Mac48Address::ConvertFrom(srcMac), Mac48Address::ConvertFrom(destMac), NetDevice::PACKET_OTHERHOST);
+      //   }
+      
+      // comment this part so the packet is not sent to L3
       m_macRxTrace (originalPacket);
+      // NS_LOG_DEBUG ("[p2p] Calling m_rxCallback with packet " << packet << ", protocol " << protocol);
       m_rxCallback (this, packet, protocol, GetRemote ());
     }
 }
@@ -533,6 +611,44 @@ PointToPointLaserNetDevice::Send (
   NS_LOG_FUNCTION (this << packet << dest << protocolNumber);
   NS_LOG_LOGIC ("p=" << packet << ", dest=" << &dest);
   NS_LOG_LOGIC ("UID is " << packet->GetUid ());
+  // NS_LOG_DEBUG ("[PointToPointLaserNetDevice::Send] " << m_address << " packet destination address: " << dest);
+  
+  // Find the OpenFlow switch device on this node and delegate to it
+  // Ptr<Node> node = GetNode();
+  // if (node != nullptr) {
+  //   for (uint32_t i = 0; i < node->GetNDevices(); ++i) {
+  //     Ptr<NetDevice> device = node->GetDevice(i);
+  //     Ptr<OpenFlowSwitchNetDevice> ofDevice = device->GetObject<OpenFlowSwitchNetDevice>();
+  //     if (ofDevice != nullptr) {
+  //       NS_LOG_DEBUG ("Delegating packet to OpenFlow switch device");
+  //       return ofDevice->Send(packet, dest, protocolNumber);
+  //     }
+  //   }
+  // }
+  
+  // Fallback: if no OpenFlow device found, use the original logic
+  // NS_LOG_WARN ("No OpenFlow switch device found, falling back to direct transmission");
+  return SendFromInternal(packet, dest, protocolNumber);
+}
+
+bool
+PointToPointLaserNetDevice::SendFrom (Ptr<Packet> packet, 
+                                 const Address &source, 
+                                 const Address &dest, 
+                                 uint16_t protocolNumber)
+{
+  NS_LOG_FUNCTION (this << packet << source << dest << protocolNumber);
+  // This will be called by OpenFlow net device with the correct destination MAC address
+  return SendFromInternal(packet, dest, protocolNumber);
+}
+
+bool
+PointToPointLaserNetDevice::SendFromInternal (Ptr<Packet> packet, const Address &dest, uint16_t protocolNumber)
+{
+  NS_LOG_FUNCTION (this << packet << dest << protocolNumber);
+  NS_LOG_LOGIC ("p=" << packet << ", dest=" << &dest);
+  NS_LOG_LOGIC ("UID is " << packet->GetUid ());
+  NS_LOG_DEBUG ("[p2p] send packet destination address: " << dest); // if do not enable arp lookup, dest will be ff:ff:ff:ff:ff:ff
 
   //
   // If IsLinkUp() is false it means there is no channel to send any packet 
@@ -577,16 +693,6 @@ PointToPointLaserNetDevice::Send (
   return false;
 }
 
-bool
-PointToPointLaserNetDevice::SendFrom (Ptr<Packet> packet, 
-                                 const Address &source, 
-                                 const Address &dest, 
-                                 uint16_t protocolNumber)
-{
-  NS_LOG_FUNCTION (this << packet << source << dest << protocolNumber);
-  return false;
-}
-
 Ptr<Node>
 PointToPointLaserNetDevice::GetNode (void) const
 {
@@ -604,7 +710,7 @@ bool
 PointToPointLaserNetDevice::NeedsArp (void) const
 {
   NS_LOG_FUNCTION (this);
-  return false;
+  return true;  // Enable ARP to get proper MAC addresses instead of broadcast
 }
 
 void
@@ -623,7 +729,8 @@ bool
 PointToPointLaserNetDevice::SupportsSendFrom (void) const
 {
   NS_LOG_FUNCTION (this);
-  return false;
+  return true;
+  // return false;
 }
 
 void
@@ -752,6 +859,11 @@ PointToPointLaserNetDevice::TrackUtilization(bool next_state_is_on) {
 const std::vector<double>&
 PointToPointLaserNetDevice::FinalizeUtilization() {
     TrackUtilization(!m_current_state_is_on);
+    return m_utilization;
+}
+
+const std::vector<double>&
+PointToPointLaserNetDevice::GetUtilizationHistory() const {
     return m_utilization;
 }
 

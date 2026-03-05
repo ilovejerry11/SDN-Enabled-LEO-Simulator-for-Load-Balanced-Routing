@@ -54,7 +54,10 @@
 #include "ns3/ipv4-routing-table-entry.h"
 #include "ns3/wifi-net-device.h"
 #include "ns3/point-to-point-laser-net-device.h"
+#include "ns3/gsl-net-device.h"
 #include "ns3/ipv4.h"
+
+#include "ns3/openflow-module.h"
 
 namespace ns3 {
 
@@ -87,6 +90,10 @@ namespace ns3 {
         // Post-processing
         void CollectUtilizationStatistics();
 
+        // getter methods for controllers
+        uint32_t GetNumControllers();
+        const NodeContainer& GetControllerNodes();
+
     private:
 
         // Build functions
@@ -94,6 +101,7 @@ namespace ns3 {
         void Build(const Ipv4RoutingHelper& ipv4RoutingHelper);
         void ReadGroundStations();
         void ReadSatellites();
+        void ReadControllers(); // my addition
         void InstallInternetStacks(const Ipv4RoutingHelper& ipv4RoutingHelper);
         void ReadISLs();
         void CreateGSLs();
@@ -116,6 +124,7 @@ namespace ns3 {
         NodeContainer m_allNodes;                           //!< All nodes
         NodeContainer m_groundStationNodes;                 //!< Ground station nodes
         NodeContainer m_satelliteNodes;                     //!< Satellite nodes
+        NodeContainer m_controllerNodes;                    //!< Controller nodes, my addition
         std::vector<Ptr<GroundStation> > m_groundStations;  //!< Ground stations
         std::vector<Ptr<Satellite>> m_satellites;           //<! Satellites
         std::set<int64_t> m_endpoints;                      //<! Endpoint ids = ground station ids
@@ -131,7 +140,6 @@ namespace ns3 {
         int64_t m_gsl_max_queue_size_pkts;
         bool m_enable_isl_utilization_tracking;
         int64_t m_isl_utilization_tracking_interval_ns;
-
     };
 
 }

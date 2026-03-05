@@ -102,7 +102,7 @@ PointToPointLaserChannel::TransmitStart (
   Time delay = this->GetDelay(senderMobility, receiverMobility); 
 
   uint32_t wire = src == m_link[0].m_src ? 0 : 1;
-
+  NS_LOG_DEBUG ("p2p laser channel Transmitting packet " << p->GetUid ());
   Simulator::ScheduleWithContext (m_link[wire].m_dst->GetNode()->GetId (),
                                   txTime + delay, &PointToPointLaserNetDevice::Receive,
                                   m_link[wire].m_dst, p->Copy ());

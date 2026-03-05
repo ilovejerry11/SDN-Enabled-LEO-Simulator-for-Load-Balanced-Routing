@@ -20,6 +20,7 @@
  */
 
 #include "topology-satellite-network.h"
+#include <limits>
 
 namespace ns3 {
 
@@ -355,6 +356,14 @@ namespace ns3 {
         NetDeviceContainer devices = gsl_helper.Install(m_satelliteNodes, m_groundStationNodes, node_gsl_if_info);
         std::cout << "    >> Finished install GSL interfaces (interfaces, network devices, one shared channel)" << std::endl;
 
+        // Utilization tracking
+        if (m_enable_isl_utilization_tracking) {
+            for (uint32_t i = 0; i < devices.GetN(); i++) {
+                devices.Get(i)->GetObject<GSLNetDevice>()->EnableUtilizationTracking(m_isl_utilization_tracking_interval_ns);
+            }
+            std::cout << "    >> Enabled utilization tracking on " << devices.GetN() << " GSL interfaces" << std::endl;
+        }
+
         // Install queueing disciplines
         tch_gsl.Install(devices);
         std::cout << "    >> Finished installing traffic control layer qdisc which will be removed later" << std::endl;
@@ -478,6 +487,43 @@ namespace ns3 {
             // Close CSV file
             fclose(file_utilization_csv);
 
+            // GSL utilization
+            FILE* file_gsl_utilization_csv = fopen((m_basicSimulation->GetLogsDir() + "/gsl_utilization.csv").c_str(), "w+");
+
+            // Iterate through all nodes and their GSL interfaces
+            for (uint32_t node_id = 0; node_id < m_allNodes.GetN(); node_id++) {
+                Ptr<Node> node = m_allNodes.Get(node_id);
+                
+                // Check all interfaces (skip loopback at index 0)
+                for (uint32_t if_id = 1; if_id < node->GetNDevices(); if_id++) {
+                    Ptr<NetDevice> netDevice = node->GetDevice(if_id);
+                    Ptr<GSLNetDevice> gslDevice = netDevice->GetObject<GSLNetDevice>();
+                    
+                    if (gslDevice != nullptr) {
+                        // This is a GSL device, collect its utilization
+                        const std::vector<double> utilization = gslDevice->FinalizeUtilization();
+                        
+                        int64_t interval_left_side_ns = 0;
+                        for (size_t j = 0; j < utilization.size(); j++) {
+                            if (j == utilization.size() - 1 || utilization[j] != utilization[j + 1]) {
+                                // CSV format: node_id,interface_id,start_ns,end_ns,utilization
+                                fprintf(file_gsl_utilization_csv,
+                                        "%d,%d,%" PRId64 ",%" PRId64 ",%f\n",
+                                        node_id,
+                                        if_id,
+                                        interval_left_side_ns,
+                                        (j + 1) * m_isl_utilization_tracking_interval_ns,
+                                        utilization[j]
+                                );
+                                interval_left_side_ns = (j + 1) * m_isl_utilization_tracking_interval_ns;
+                            }
+                        }
+                    }
+                }
+            }
+
+            fclose(file_gsl_utilization_csv);
+
         }
     }
 
@@ -548,6 +594,14 @@ namespace ns3 {
 
     const std::set<int64_t>& TopologySatelliteNetwork::GetEndpoints() {
         return m_endpoints;
+    }
+
+    uint32_t TopologySatelliteNetwork::GetNumControllers() {
+        return m_controllerNodes.GetN();
+    }
+
+    const NodeContainer& TopologySatelliteNetwork::GetControllerNodes() {
+        return m_controllerNodes;
     }
 
 }

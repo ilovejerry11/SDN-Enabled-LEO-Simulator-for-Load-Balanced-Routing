@@ -100,7 +100,7 @@ GSLChannel::TransmitTo(Ptr<const Packet> p, Ptr<GSLNetDevice> srcNetDevice, Ptr<
 
   // Distributed mode is not enabled
   NS_ABORT_MSG_UNLESS(isSameSystem, "MPI distributed mode is currently not supported by the GSL channel.");
-
+  // NS_LOG_DEBUG ("gsl Transmitting packet " << p->GetUid ());
   // Schedule arrival of packet at destination network device
   Simulator::ScheduleWithContext(
           receiverNode->GetId(),

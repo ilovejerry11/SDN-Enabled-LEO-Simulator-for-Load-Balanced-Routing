@@ -21,6 +21,8 @@
 #define ARBITER_SINGLE_FORWARD_H
 
 #include <tuple>
+#include <set>
+#include <map>
 #include "ns3/arbiter-satnet.h"
 #include "ns3/topology-satellite-network.h"
 #include "ns3/hash.h"
@@ -28,6 +30,8 @@
 #include "ns3/ipv4-header.h"
 #include "ns3/udp-header.h"
 #include "ns3/tcp-header.h"
+#include "ns3/callback.h"
+#include "ns3/simulator.h"
 
 namespace ns3 {
 
@@ -40,7 +44,7 @@ public:
     ArbiterSingleForward(
             Ptr<Node> this_node,
             NodeContainer nodes,
-            std::vector<std::tuple<int32_t, int32_t, int32_t>> next_hop_list
+            std::map<std::pair<int32_t, int32_t>, std::tuple<int32_t, int32_t, int32_t>> next_hop_list
     );
 
     // Single forward next-hop implementation
@@ -53,14 +57,18 @@ public:
     );
 
     // Updating of forward state
-    void SetSingleForwardState(int32_t target_node_id, int32_t next_node_id, int32_t own_if_id, int32_t next_if_id);
+    void SetSingleForwardState(int32_t source_node_id, int32_t target_node_id, int32_t next_node_id, int32_t own_if_id, int32_t next_if_id);
+
+    // On-demand route setup callback
+    void SetRouteSetupCallback(Callback<bool, int32_t, int32_t> callback);
 
     // Static routing table
     std::string StringReprOfForwardingState();
 
 private:
-    std::vector<std::tuple<int32_t, int32_t, int32_t>> m_next_hop_list;
-
+    std::map<std::pair<int32_t, int32_t>, std::tuple<int32_t, int32_t, int32_t>> m_next_hop_list;
+    Callback<bool, int32_t, int32_t> m_route_setup_callback;
+    std::set<int32_t> m_pending_route_setups;  // Track destinations being set up
 };
 
 }

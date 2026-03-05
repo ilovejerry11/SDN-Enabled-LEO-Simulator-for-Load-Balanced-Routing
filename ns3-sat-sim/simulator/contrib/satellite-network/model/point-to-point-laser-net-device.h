@@ -273,6 +273,20 @@ private:
   void TransmitComplete (void);
 
   /**
+   * \brief Internal send method that contains the original Send logic
+   *
+   * This method performs the actual packet transmission logic that was
+   * originally in the Send method, including header addition, queueing,
+   * and transmission start.
+   *
+   * \param packet Ptr to the packet to send
+   * \param dest The destination address
+   * \param protocolNumber The protocol number
+   * \returns true if success, false on failure
+   */
+  bool SendFromInternal (Ptr<Packet> packet, const Address &dest, uint16_t protocolNumber);
+
+  /**
    * \brief Make the link up and running
    *
    * It calls also the linkChange callback.
@@ -484,6 +498,7 @@ private:
 public:
     void EnableUtilizationTracking(int64_t interval_ns);
     const std::vector<double>& FinalizeUtilization();
+    const std::vector<double>& GetUtilizationHistory() const;
 
 };
 

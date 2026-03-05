@@ -256,6 +256,7 @@ GSLNetDevice::TransmitStart (Ptr<Packet> p, const Address dest)
   m_txMachineState = BUSY;
   m_currentPkt = p;
   m_phyTxBeginTrace (m_currentPkt);
+  TrackUtilization(true);
 
   Time txTime = m_bps.CalculateBytesTxTime (p->GetSize ());
   Time txCompleteTime = txTime + m_tInterframeGap;
@@ -290,6 +291,7 @@ GSLNetDevice::TransmitComplete (const Address dest)
   NS_ASSERT_MSG (m_currentPkt != 0, "GSLNetDevice::TransmitComplete(): m_currentPkt zero");
 
   m_phyTxEndTrace (m_currentPkt);
+  TrackUtilization(false);
   m_currentPkt = 0;
 
   Ptr<Packet> p = m_queue->Dequeue ();
@@ -345,6 +347,8 @@ void
 GSLNetDevice::Receive (Ptr<Packet> packet)
 {
   NS_LOG_FUNCTION (this << packet << this->GetNode()->GetId());
+  NS_LOG_INFO ("--------------------------------------------");
+  NS_LOG_DEBUG ("[gsl] Node " << m_node->GetId() <<  ", netdev receive packet with UID " << packet->GetUid ());
   uint16_t protocol = 0;
 
   if (m_receiveErrorModel && m_receiveErrorModel->IsCorrupt (packet) ) 
@@ -380,17 +384,19 @@ GSLNetDevice::Receive (Ptr<Packet> packet)
       //
       ProcessHeader (packet, protocol);
 
-      if (!m_promiscCallback.IsNull ())
-        {
-          m_macPromiscRxTrace (originalPacket);
-          //   the from address is incorrect (because it is unknown), but no effect is noticed on 
-          // traffic reception
-          //   a solution would require changes to NS3 core to support send and receive that receive a
-          // 'from' argument for distributed simulator
-          m_promiscCallback (this, packet, protocol, GetAddress(), GetAddress (), NetDevice::PACKET_HOST);
-        }
+      // if (!m_promiscCallback.IsNull ())
+      //   {
+      //     NS_LOG_DEBUG ("[gsl] Promiscuous callback is not null, calling it");
+      //     m_macPromiscRxTrace (originalPacket);
+      //     //   the from address is incorrect (because it is unknown), but no effect is noticed on 
+      //     // traffic reception
+      //     //   a solution would require changes to NS3 core to support send and receive that receive a
+      //     // 'from' argument for distributed simulator
+      //     m_promiscCallback (this, packet, protocol, GetAddress(), GetAddress (), NetDevice::PACKET_HOST);
+      //   }
 
       m_macRxTrace (originalPacket);
+      // NS_LOG_DEBUG ("[gsl] Calling m_rxCallback with packet " << packet << ", protocol " << protocol);
       m_rxCallback (this, packet, protocol, GetAddress());
     }
 }
@@ -515,7 +521,7 @@ GSLNetDevice::Send (
   NS_LOG_LOGIC ("p=" << packet << ", dest=" << &dest);
   NS_LOG_LOGIC ("UID is " << packet->GetUid ());
   NS_LOG_LOGIC ("node is " << this->GetNode()->GetId());
-
+  NS_LOG_DEBUG ("[gsl] send packet destination address: " << dest);
   //
   // If IsLinkUp() is false it means there is no channel to send any packet 
   // over so we just hit the drop trace on the packet and return an error.
@@ -569,7 +575,8 @@ GSLNetDevice::SendFrom (Ptr<Packet> packet,
                         uint16_t protocolNumber)
 {
   NS_LOG_FUNCTION (this << packet << source << dest << protocolNumber);
-  return false;
+  return Send(packet, dest, protocolNumber);
+  // return false;
 }
 
 Ptr<Node>
@@ -608,7 +615,8 @@ bool
 GSLNetDevice::SupportsSendFrom (void) const
 {
   NS_LOG_FUNCTION (this);
-  return false;
+  return true;
+  // return false;
 }
 
 void
@@ -657,6 +665,72 @@ GSLNetDevice::EtherToPpp (uint16_t proto)
     default: NS_ASSERT_MSG (false, "PPP Protocol number not defined!");
     }
   return 0;
+}
+
+void
+GSLNetDevice::EnableUtilizationTracking(int64_t interval_ns) {
+    m_utilization_tracking_enabled = true;
+    m_interval_ns = interval_ns;
+    m_prev_time_ns = 0;
+    m_current_interval_start = 0;
+    m_current_interval_end = m_interval_ns;
+    m_idle_time_counter_ns = 0;
+    m_busy_time_counter_ns = 0;
+    m_current_state_is_on = false;
+}
+
+void
+GSLNetDevice::TrackUtilization(bool next_state_is_on) {
+    if (m_utilization_tracking_enabled) {
+
+        // Current time in nanoseconds
+        int64_t now_ns = Simulator::Now().GetNanoSeconds();
+        while (now_ns >= m_current_interval_end) {
+
+            // Add everything until the end of the interval
+            if (next_state_is_on) {
+                m_idle_time_counter_ns += m_current_interval_end - m_prev_time_ns;
+            } else {
+                m_busy_time_counter_ns += m_current_interval_end - m_prev_time_ns;
+            }
+
+            // Save into the utilization array
+            m_utilization.push_back(((double) m_busy_time_counter_ns) / ((double) m_interval_ns));
+
+            // This must match up
+            NS_ABORT_MSG_IF(m_idle_time_counter_ns + m_busy_time_counter_ns != m_interval_ns, "Not all time is accounted for");
+
+            // Move to next interval
+            m_idle_time_counter_ns = 0;
+            m_busy_time_counter_ns = 0;
+            m_prev_time_ns = m_current_interval_end;
+            m_current_interval_start += m_interval_ns;
+            m_current_interval_end += m_interval_ns;
+        }
+
+        // If not at the end of a new interval, just keep track of it all
+        if (next_state_is_on) {
+            m_idle_time_counter_ns += now_ns - m_prev_time_ns;
+        } else {
+            m_busy_time_counter_ns += now_ns - m_prev_time_ns;
+        }
+
+        // This has become the previous call
+        m_current_state_is_on = next_state_is_on;
+        m_prev_time_ns = now_ns;
+
+    }
+}
+
+const std::vector<double>&
+GSLNetDevice::FinalizeUtilization() {
+    TrackUtilization(!m_current_state_is_on);
+    return m_utilization;
+}
+
+const std::vector<double>&
+GSLNetDevice::GetUtilizationHistory() const {
+    return m_utilization;
 }
 
 

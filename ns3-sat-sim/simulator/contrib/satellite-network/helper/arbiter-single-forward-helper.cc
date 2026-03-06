@@ -875,4 +875,65 @@ void ArbiterSingleForwardHelper::SetupOptimalRoute(uint32_t gs_a, uint32_t gs_b)
     std::cout << " -> GS" << gs_b << std::endl;
 }
 
+void ArbiterSingleForwardHelper::CollectPathStatistics() {
+    if (m_topology == nullptr) {
+        std::cout << "  > Skipping path statistics collection (topology is not available)" << std::endl;
+        return;
+    }
+
+    std::string filename = m_basicSimulation->GetLogsDir() + "/path_statistics.csv";
+    FILE* file_path_statistics_csv = fopen(filename.c_str(), "w+");
+    if (file_path_statistics_csv == nullptr) {
+        throw std::runtime_error(format_string("File %s could not be opened.", filename.c_str()));
+    }
+
+    fprintf(file_path_statistics_csv, "src_gs_id,dst_gs_id,hop_count,total_distance_m\n");
+
+    uint32_t num_satellites = m_topology->GetNumSatellites();
+    for (const auto& route_entry : m_cached_route_paths) {
+        uint32_t gs_a = route_entry.first.first;
+        uint32_t gs_b = route_entry.first.second;
+        const std::vector<int32_t>& cached_path = route_entry.second;
+
+        int32_t gs_a_node_id = static_cast<int32_t>(num_satellites + gs_a);
+        int32_t gs_b_node_id = static_cast<int32_t>(num_satellites + gs_b);
+
+        std::vector<int32_t> full_path;
+        full_path.reserve(cached_path.size() + 2);
+        full_path.push_back(gs_a_node_id);
+        full_path.insert(full_path.end(), cached_path.begin(), cached_path.end());
+        full_path.push_back(gs_b_node_id);
+
+        uint32_t hop_count = full_path.size() > 1 ? static_cast<uint32_t>(full_path.size() - 1) : 0;
+        double total_distance_m = 0.0;
+
+        for (size_t i = 0; i + 1 < full_path.size(); ++i) {
+            int32_t from_node_id = full_path[i];
+            int32_t to_node_id = full_path[i + 1];
+
+            NS_ABORT_MSG_IF(from_node_id < 0 || static_cast<uint32_t>(from_node_id) >= m_nodes.GetN(), "Invalid source node id in cached path statistics");
+            NS_ABORT_MSG_IF(to_node_id < 0 || static_cast<uint32_t>(to_node_id) >= m_nodes.GetN(), "Invalid destination node id in cached path statistics");
+
+            Ptr<MobilityModel> from_mobility = m_nodes.Get(from_node_id)->GetObject<MobilityModel>();
+            Ptr<MobilityModel> to_mobility = m_nodes.Get(to_node_id)->GetObject<MobilityModel>();
+            NS_ABORT_MSG_UNLESS(from_mobility != nullptr && to_mobility != nullptr, "Missing mobility model for path statistics");
+
+            total_distance_m += from_mobility->GetDistanceFrom(to_mobility);
+        }
+
+        fprintf(
+                file_path_statistics_csv,
+                "%u,%u,%u,%.6f\n",
+                gs_a,
+                gs_b,
+                hop_count,
+                total_distance_m
+        );
+    }
+
+    fclose(file_path_statistics_csv);
+    std::cout << "  > Collected path statistics for " << m_cached_route_paths.size()
+              << " cached route(s) into " << filename << std::endl;
+}
+
 } // namespace ns3

@@ -100,6 +100,7 @@ namespace ns3 {
     public:
         // On-demand route setup (called by arbiters via callback)
         bool HandleRouteSetupRequest(int32_t source_node_id, int32_t target_node_id);
+        void CollectPathStatistics();
 
     };
 

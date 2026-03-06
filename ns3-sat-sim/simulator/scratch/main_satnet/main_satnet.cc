@@ -51,18 +51,6 @@ int main(int argc, char *argv[]) {
     // No buffering of printf
     setbuf(stdout, nullptr);
 
-    // LogComponentEnable ("OpenFlowSwitchNetDevice", LOG_LEVEL_INFO);
-    // LogComponentEnable ("OpenFlowInterface", LOG_LEVEL_INFO);
-
-    // LogComponentEnable ("PointToPointLaserNetDevice", LOG_LEVEL_INFO);
-    // LogComponentEnable ("GSLNetDevice", LOG_LEVEL_INFO);
-    // LogComponentEnable ("PointToPointLaserChannel", LOG_LEVEL_INFO);
-    // LogComponentEnable ("GSLChannel", LOG_LEVEL_INFO);
-    // LogComponentEnable ("Ipv4ArbiterRouting", LOG_LEVEL_INFO);
-
-    // LogComponentEnable ("Ipv4L3Protocol", LOG_LEVEL_INFO);
-    // LogComponentEnable ("Node", LOG_LEVEL_INFO);
-
     // Retrieve run directory
     CommandLine cmd;
     std::string run_dir = "";
@@ -111,6 +99,9 @@ int main(int argc, char *argv[]) {
 
     // Collect utilization statistics
     topology->CollectUtilizationStatistics();
+
+    // Collect path statistics (e.g., end-end distance, hop count)
+    arbiterHelper.CollectPathStatistics();
 
     // Finalize the simulation
     basicSimulation->Finalize();

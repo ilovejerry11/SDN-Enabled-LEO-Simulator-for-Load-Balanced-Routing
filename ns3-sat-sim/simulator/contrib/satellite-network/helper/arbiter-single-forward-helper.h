@@ -94,8 +94,8 @@ namespace ns3 {
         std::map<int32_t, std::vector<std::tuple<int32_t, int32_t, int32_t>>> m_neighbor_cache;
         bool m_neighbor_cache_built = false;
         
-        // Active route cache: (source_gs, target_gs) -> (first_sat, last_sat)
-        std::map<std::pair<uint32_t, uint32_t>, std::pair<int64_t, int64_t>> m_cached_routes;
+        // Active route path cache: (source_gs, target_gs) -> full mixed path (sat + possible relay GS)
+        std::map<std::pair<uint32_t, uint32_t>, std::vector<int32_t>> m_cached_route_paths;
 
     public:
         // On-demand route setup (called by arbiters via callback)

@@ -408,14 +408,14 @@ bool ArbiterSingleForwardHelper::HandleRouteSetupRequest(int32_t source_node_id,
     
     // Check if route exists and is still valid
     auto route_key = std::make_pair(gs_a, gs_b);
-    if (m_cached_routes.find(route_key) != m_cached_routes.end()) {
+    if (m_cached_route_paths.find(route_key) != m_cached_route_paths.end()) {
         if (IsRouteStillValid(gs_a, gs_b)) {
             // Route still valid, no need to recalculate
             std::cout << "  > CONTROLLER: Using cached route GS" << gs_a << " -> GS" << gs_b << std::endl;
             return true;
         } else {
             // Route invalid, remove from cache
-            m_cached_routes.erase(route_key);
+            m_cached_route_paths.erase(route_key);
             std::cout << "  > CONTROLLER: Cached route invalid, recalculating GS" << gs_a << " -> GS" << gs_b << std::endl;
         }
     }
@@ -721,27 +721,60 @@ std::pair<std::vector<int32_t>, double> ArbiterSingleForwardHelper::ComputeMulti
 }
 
 bool ArbiterSingleForwardHelper::IsRouteStillValid(uint32_t gs_a, uint32_t gs_b) {
-    auto route_it = m_cached_routes.find(std::make_pair(gs_a, gs_b));
-    if (route_it == m_cached_routes.end()) return false;
-    
-    int64_t cached_first_sat = route_it->second.first;
-    int64_t cached_last_sat = route_it->second.second;
-    
-    uint32_t gs_a_node_id = m_topology->GetNumSatellites() + gs_a;
-    uint32_t gs_b_node_id = m_topology->GetNumSatellites() + gs_b;
-    
-    // Check if first and last satellites are still reachable
-    auto it_a = m_reachable_nodes.find(gs_a_node_id);
-    auto it_b = m_reachable_nodes.find(gs_b_node_id);
-    
-    if (it_a == m_reachable_nodes.end() || it_b == m_reachable_nodes.end()) {
+    auto route_key = std::make_pair(gs_a, gs_b);
+
+    auto path_it = m_cached_route_paths.find(route_key);
+    if (path_it == m_cached_route_paths.end()) {
         return false;
     }
-    
-    bool first_sat_reachable = it_a->second.count(cached_first_sat) > 0;
-    bool last_sat_reachable = it_b->second.count(cached_last_sat) > 0;
-    
-    return first_sat_reachable && last_sat_reachable;
+
+    const std::vector<int32_t>& cached_path = path_it->second;
+    if (cached_path.empty()) {
+        return false;
+    }
+
+    uint32_t num_satellites = m_topology->GetNumSatellites();
+    int32_t gs_a_node_id = static_cast<int32_t>(num_satellites + gs_a);
+    int32_t gs_b_node_id = static_cast<int32_t>(num_satellites + gs_b);
+
+    std::vector<int32_t> full_path;
+    full_path.reserve(cached_path.size() + 2);
+    full_path.push_back(gs_a_node_id);
+    full_path.insert(full_path.end(), cached_path.begin(), cached_path.end());
+    full_path.push_back(gs_b_node_id);
+
+    for (size_t i = 0; i + 1 < full_path.size(); ++i) {
+        int32_t from_node = full_path[i];
+        int32_t to_node = full_path[i + 1];
+
+        bool from_is_sat = m_topology->IsSatelliteId(from_node);
+        bool to_is_sat = m_topology->IsSatelliteId(to_node);
+        bool from_is_gs = m_topology->IsGroundStationId(from_node);
+        bool to_is_gs = m_topology->IsGroundStationId(to_node);
+
+        if (from_is_sat && to_is_sat) {
+            bool edge_exists = false;
+            const auto& neighbors = GetNeighbors(from_node);
+            for (const auto& neighbor_tuple : neighbors) {
+                if (std::get<0>(neighbor_tuple) == to_node) {
+                    edge_exists = true;
+                    break;
+                }
+            }
+            if (!edge_exists) {
+                return false;
+            }
+        } else if ((from_is_sat && to_is_gs) || (from_is_gs && to_is_sat)) {
+            auto it = m_reachable_nodes.find(from_node);
+            if (it == m_reachable_nodes.end() || it->second.count(to_node) == 0) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 void ArbiterSingleForwardHelper::ValidateActiveRoutes() {
@@ -772,7 +805,7 @@ void ArbiterSingleForwardHelper::ValidateActiveRoutes() {
         
         // Remove from cache
         auto route_key = std::make_pair(gs_a, gs_b);
-        m_cached_routes.erase(route_key);
+        m_cached_route_paths.erase(route_key);
 
         SetupOptimalRoute(gs_a, gs_b);
     }
@@ -821,8 +854,8 @@ void ArbiterSingleForwardHelper::SetupOptimalRoute(uint32_t gs_a, uint32_t gs_b)
     int64_t first_sat = path.front();
     int64_t last_sat = path.back();
     
-    // Cache the route
-    m_cached_routes[std::make_pair(gs_a, gs_b)] = std::make_pair(first_sat, last_sat);
+    // Cache the route path
+    m_cached_route_paths[std::make_pair(gs_a, gs_b)] = path;
 
     SetupGroundStationRoute(gs_a, gs_b, path);
     

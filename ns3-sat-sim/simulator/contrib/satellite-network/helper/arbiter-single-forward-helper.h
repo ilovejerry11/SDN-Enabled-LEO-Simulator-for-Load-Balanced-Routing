@@ -50,6 +50,7 @@ namespace ns3 {
         static constexpr double COST_PARAM_B = 5.0;  // ISL utilization weight
         static constexpr double COST_PARAM_GSL = 5.0;  // GSL utilization weight
         static constexpr double MAX_UTILIZATION = 0.99; // threshold for infinite cost
+        static constexpr int32_t RELAY_GROUND_STATION_COUNT = 198;
 
         std::vector<std::map<std::pair<int32_t, int32_t>, std::tuple<int32_t, int32_t, int32_t>>> InitialEmptyForwardingState();
         void UpdateForwardingState(int64_t t);
@@ -65,8 +66,10 @@ namespace ns3 {
             const std::set<int64_t>& target_satellites
         );
         double CalculateEdgeCost(int32_t from_node, int32_t to_node);
+        double CalculateGSLEdgeCost(int32_t from_node_id, int32_t to_node_id);
         double GetLinkUtilization(int32_t from_node, int32_t to_node);
-        double GetSatelliteGSLUtilization(int32_t satellite_id);
+        double GetSatelliteGSLUtilization(int32_t from_node_id, int32_t to_node_id);
+        std::vector<std::pair<int32_t, double>> GetNeighborsWithCost(int32_t node_id);
         const std::vector<std::tuple<int32_t, int32_t, int32_t>>& GetNeighbors(int32_t node_id);
         bool IsRouteStillValid(uint32_t gs_a, uint32_t gs_b);
         void ValidateActiveRoutes();

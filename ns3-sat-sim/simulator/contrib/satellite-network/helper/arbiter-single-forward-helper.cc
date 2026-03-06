@@ -345,48 +345,45 @@ void ArbiterSingleForwardHelper::SetupGroundStationRoute(uint32_t gs_a, uint32_t
         return;
     }
 
-    int64_t first_sat = sat_path.front();
-    int64_t last_sat = sat_path.back();
+    std::vector<int32_t> full_path;
+    full_path.reserve(sat_path.size() + 2);
+    full_path.push_back(gs_a_node_id);
+    full_path.insert(full_path.end(), sat_path.begin(), sat_path.end());
+    full_path.push_back(gs_b_node_id);
 
-    // 1) GS_A -> first_sat
-    auto gs_to_sat_interfaces = FindInterfaceIds(gs_a_node_id, first_sat);
-    if (gs_to_sat_interfaces.first == -1) {
-        std::cout << "    >> WARNING: Could not find interface GS" << gs_a << " -> Sat" << first_sat << std::endl;
-        m_arbiters.at(gs_a_node_id)->SetSingleForwardState(gs_a_node_id, gs_b_node_id, -1, -1, -1);
-        return;
+    for (size_t i = 1; i + 1 < full_path.size(); ++i) {
+        int32_t node_id = full_path[i];
+        if (m_topology->IsGroundStationId(node_id)) {
+            int32_t gs_local_id = node_id - static_cast<int32_t>(num_satellites);
+            if (gs_local_id < 0 || gs_local_id >= RELAY_GROUND_STATION_COUNT) {
+                std::cout << "    >> WARNING: Non-relay GS" << gs_local_id
+                          << " cannot be used as intermediate relay" << std::endl;
+                m_arbiters.at(gs_a_node_id)->SetSingleForwardState(gs_a_node_id, gs_b_node_id, -1, -1, -1);
+                return;
+            }
+        }
     }
-    m_arbiters.at(gs_a_node_id)->SetSingleForwardState(
-    gs_a_node_id, gs_b_node_id, first_sat,
-        1 + gs_to_sat_interfaces.first,
-        1 + gs_to_sat_interfaces.second);
 
-    // 2) Program satellite hops along path
-    for (size_t i = 0; i + 1 < sat_path.size(); ++i) {
-        int64_t current_sat = sat_path[i];
-        int64_t next_sat = sat_path[i + 1];
-        auto sat_interfaces = FindInterfaceIds(current_sat, next_sat);
-        if (sat_interfaces.first == -1) {
-            std::cout << "    >> WARNING: Could not find interface Sat" << current_sat << " -> Sat" << next_sat << std::endl;
-            m_arbiters.at(current_sat)->SetSingleForwardState(gs_a_node_id, gs_b_node_id, -1, -1, -1);
+    for (size_t i = 0; i + 1 < full_path.size(); ++i) {
+        int64_t current_node = full_path[i];
+        int64_t next_node = full_path[i + 1];
+
+        auto interfaces = FindInterfaceIds(current_node, next_node);
+        if (interfaces.first == -1) {
+            std::cout << "    >> WARNING: Could not find interface Node" << current_node
+                      << " -> Node" << next_node << std::endl;
+            m_arbiters.at(current_node)->SetSingleForwardState(gs_a_node_id, gs_b_node_id, -1, -1, -1);
             return;
         }
-        m_arbiters.at(current_sat)->SetSingleForwardState(
-            gs_a_node_id, gs_b_node_id, next_sat,
-            1 + sat_interfaces.first,
-            1 + sat_interfaces.second);
-    }
 
-    // 3) last_sat -> GS_B
-    auto sat_to_gs_interfaces = FindInterfaceIds(last_sat, gs_b_node_id);
-    if (sat_to_gs_interfaces.first == -1) {
-        std::cout << "    >> WARNING: Could not find interface Sat" << last_sat << " -> GS" << gs_b << std::endl;
-        m_arbiters.at(last_sat)->SetSingleForwardState(gs_a_node_id, gs_b_node_id, -1, -1, -1);
-        return;
+        m_arbiters.at(current_node)->SetSingleForwardState(
+            gs_a_node_id,
+            gs_b_node_id,
+            next_node,
+            1 + interfaces.first,
+            1 + interfaces.second
+        );
     }
-    m_arbiters.at(last_sat)->SetSingleForwardState(
-        gs_a_node_id, gs_b_node_id, gs_b_node_id,
-        1 + sat_to_gs_interfaces.first,
-        1 + sat_to_gs_interfaces.second);
 }
 
 bool ArbiterSingleForwardHelper::HandleRouteSetupRequest(int32_t source_node_id, int32_t target_node_id) {
@@ -539,24 +536,91 @@ double ArbiterSingleForwardHelper::GetLinkUtilization(int32_t from_node, int32_t
     return 0.0; // No direct connection found
 }
 
-double ArbiterSingleForwardHelper::GetSatelliteGSLUtilization(int32_t satellite_id) {
-    // Satellites use interface 4 for GSL (IPv4 interface index 5)
-    Ptr<Node> sat_node = m_nodes.Get(satellite_id);
-    Ptr<Ipv4> ipv4 = sat_node->GetObject<Ipv4>();
-    
-    if (ipv4 == nullptr || ipv4->GetNInterfaces() <= 5) {
-        return 0.0; // No GSL interface
+double ArbiterSingleForwardHelper::GetSatelliteGSLUtilization(int32_t from_node_id, int32_t to_node_id) {
+    (void) to_node_id;
+
+    bool from_is_satellite = m_topology->IsSatelliteId(from_node_id);
+    bool from_is_ground_station = m_topology->IsGroundStationId(from_node_id);
+
+    if (!from_is_satellite && !from_is_ground_station) {
+        return 0.0;
     }
-    
-    Ptr<NetDevice> gsl_device = ipv4->GetNetDevice(5); // Interface 4 + 1 (skip loopback)
+
+    Ptr<Node> node = m_nodes.Get(from_node_id);
+    Ptr<Ipv4> ipv4 = node->GetObject<Ipv4>();
+
+    uint32_t gsl_ipv4_if = from_is_satellite ? 5 : 1;
+    if (ipv4 == nullptr || ipv4->GetNInterfaces() <= gsl_ipv4_if) {
+        return 0.0;
+    }
+
+    Ptr<NetDevice> gsl_device = ipv4->GetNetDevice(gsl_ipv4_if);
     Ptr<GSLNetDevice> gsl_net_device = gsl_device->GetObject<GSLNetDevice>();
-    
+
     if (gsl_net_device != nullptr) {
         const std::vector<double>& util_history = gsl_net_device->GetUtilizationHistory();
         return util_history.empty() ? 0.0 : util_history.back();
     }
-    
+
     return 0.0;
+}
+
+double ArbiterSingleForwardHelper::CalculateGSLEdgeCost(int32_t from_node_id, int32_t to_node_id) {
+    double utilization = GetSatelliteGSLUtilization(from_node_id, to_node_id);
+    // if (utilization >= MAX_UTILIZATION) {
+    //     return std::numeric_limits<double>::infinity();
+    // }
+    return COST_PARAM_A + COST_PARAM_GSL * utilization;
+}
+
+std::vector<std::pair<int32_t, double>> ArbiterSingleForwardHelper::GetNeighborsWithCost(int32_t node_id) {
+    std::vector<std::pair<int32_t, double>> neighbors_with_cost;
+    uint32_t num_satellites = m_topology->GetNumSatellites();
+
+    auto isRelayGroundStationNode = [&](int32_t candidate_node_id) {
+        if (!m_topology->IsGroundStationId(candidate_node_id)) {
+            return false;
+        }
+        int32_t gs_local_id = candidate_node_id - static_cast<int32_t>(num_satellites);
+        return gs_local_id >= 0 && gs_local_id < RELAY_GROUND_STATION_COUNT;
+    };
+
+    if (m_topology->IsSatelliteId(node_id)) {
+        const auto& isl_neighbors = GetNeighbors(node_id);
+        for (const auto& neighbor_tuple : isl_neighbors) {
+            int32_t neighbor = std::get<0>(neighbor_tuple);
+            if (!m_topology->IsSatelliteId(neighbor)) {
+                continue;
+            }
+            double edge_cost = CalculateEdgeCost(node_id, neighbor);
+            neighbors_with_cost.push_back(std::make_pair(neighbor, edge_cost));
+        }
+    }
+
+    auto it = m_reachable_nodes.find(node_id);
+    if (it != m_reachable_nodes.end()) {
+        for (int64_t neighbor_id_64 : it->second) {
+            int32_t neighbor_id = static_cast<int32_t>(neighbor_id_64);
+
+            bool node_is_sat = m_topology->IsSatelliteId(node_id);
+            bool node_is_gs = m_topology->IsGroundStationId(node_id);
+            bool neighbor_is_sat = m_topology->IsSatelliteId(neighbor_id);
+            bool neighbor_is_gs = m_topology->IsGroundStationId(neighbor_id);
+
+            if ((node_is_sat && neighbor_is_gs) || (node_is_gs && neighbor_is_sat)) {
+                if (node_is_sat && neighbor_is_gs && !isRelayGroundStationNode(neighbor_id)) {
+                    continue;
+                }
+                if (node_is_gs && neighbor_is_sat && !isRelayGroundStationNode(node_id)) {
+                    continue;
+                }
+                double edge_cost = CalculateGSLEdgeCost(node_id, neighbor_id);
+                neighbors_with_cost.push_back(std::make_pair(neighbor_id, edge_cost));
+            }
+        }
+    }
+
+    return neighbors_with_cost;
 }
 
 double ArbiterSingleForwardHelper::CalculateEdgeCost(int32_t from_node, int32_t to_node) {
@@ -564,11 +628,12 @@ double ArbiterSingleForwardHelper::CalculateEdgeCost(int32_t from_node, int32_t 
     
     // Lazy evaluation of utilization
     double utilization = GetLinkUtilization(from_node, to_node);
-    if (utilization >= MAX_UTILIZATION) {
-        return std::numeric_limits<double>::infinity();
-    }
+    // if (utilization >= MAX_UTILIZATION) {
+    //     return std::numeric_limits<double>::infinity();
+    // }
     
-    double util_cost = COST_PARAM_B * utilization / (1.0 - utilization);
+    // double util_cost = COST_PARAM_B * utilization / (1.0 - utilization); // Exponential cost function
+    double util_cost = COST_PARAM_B * utilization; // Linear cost function
     return hop_cost + util_cost;
 }
 
@@ -585,8 +650,8 @@ std::pair<std::vector<int32_t>, double> ArbiterSingleForwardHelper::ComputeMulti
     int32_t best_target_node = -1;
     double best_total_cost = std::numeric_limits<double>::infinity();
     
-    // Initialize distances for all satellites
-    for (uint32_t i = 0; i < m_topology->GetNumSatellites(); i++) {
+    // Initialize distances for all nodes (satellites + ground stations)
+    for (uint32_t i = 0; i < m_nodes.GetN(); i++) {
         distances[i] = std::numeric_limits<double>::infinity();
         previous[i] = -1;
     }
@@ -613,23 +678,19 @@ std::pair<std::vector<int32_t>, double> ArbiterSingleForwardHelper::ComputeMulti
 
         // If this is a target satellite, include target-side GSL egress cost
         if (target_satellites.count(curr_node) > 0) {
-            double gsl_util = GetSatelliteGSLUtilization(curr_node);
-            double candidate_total_cost = curr_dist + COST_PARAM_GSL * gsl_util;
+            int32_t any_gs_node_id = static_cast<int32_t>(m_topology->GetNumSatellites());
+            double candidate_total_cost = curr_dist + CalculateGSLEdgeCost(curr_node, any_gs_node_id);
             if (candidate_total_cost < best_total_cost) {
                 best_total_cost = candidate_total_cost;
                 best_target_node = curr_node;
             }
         }
         
-        // Check all neighbors (using optimized neighbor cache)
-        const auto& neighbors = GetNeighbors(curr_node);
-        for (const auto& neighbor_tuple : neighbors) {
-            int32_t neighbor = std::get<0>(neighbor_tuple);
-            
-            // Only consider satellite nodes (ISL connections)
-            if (neighbor >= (int32_t)m_topology->GetNumSatellites()) continue;
-            
-            double edge_cost = CalculateEdgeCost(curr_node, neighbor);
+        // Check all neighbors (ISL and GSL relay edges)
+        const auto neighbors = GetNeighborsWithCost(curr_node);
+        for (const auto& neighbor_cost_pair : neighbors) {
+            int32_t neighbor = neighbor_cost_pair.first;
+            double edge_cost = neighbor_cost_pair.second;
             
             // Skip infinite cost edges
             if (edge_cost == std::numeric_limits<double>::infinity()) continue;
@@ -765,14 +826,18 @@ void ArbiterSingleForwardHelper::SetupOptimalRoute(uint32_t gs_a, uint32_t gs_b)
 
     SetupGroundStationRoute(gs_a, gs_b, path);
     
-    std::cout << "    >> Optimal route GS" << gs_a << " -> GS" << gs_b 
-              << " via satellites " << first_sat << " -> " << last_sat 
-              << " (cost: " << cost << ", hops: " << path.size() - 1 << ")" << std::endl;
+    std::cout << "    >> Optimal route GS" << gs_a << " -> GS" << gs_b
+              << " via entry Sat" << first_sat << " -> exit Sat" << last_sat
+              << " (cost: " << cost << ", hops: " << path.size() + 1 << ")" << std::endl;
     
-    // Print the complete satellite path
+    // Print the complete path (including possible GS relays)
     std::cout << "    >> Complete path: GS" << gs_a;
-    for (const auto& sat : path) {
-        std::cout << " -> Sat" << sat;
+    for (const auto& node_id : path) {
+        if (m_topology->IsSatelliteId(node_id)) {
+            std::cout << " -> Sat" << node_id;
+        } else {
+            std::cout << " -> GS" << (node_id - static_cast<int32_t>(num_satellites));
+        }
     }
     std::cout << " -> GS" << gs_b << std::endl;
 }

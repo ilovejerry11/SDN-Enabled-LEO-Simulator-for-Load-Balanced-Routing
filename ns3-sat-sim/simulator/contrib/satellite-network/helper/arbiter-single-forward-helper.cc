@@ -18,6 +18,7 @@
  */
 
 #include "arbiter-single-forward-helper.h"
+#include <algorithm>
 
 namespace ns3 {
 
@@ -213,6 +214,11 @@ void ArbiterSingleForwardHelper::UpdateForwardingState(int64_t t) {
         throw std::runtime_error(format_string("File %s could not be read.", filename.c_str()));
     }
 
+    // Initialize accessible nodes once at t=0, then maintain incrementally on add/remove reachability updates
+    if (t == 0) {
+        InitializeAccessibleNodes();
+    }
+
     // Proactive route validation for active flows
     if (m_topology != nullptr) {
         ValidateActiveRoutes();
@@ -233,6 +239,264 @@ void ArbiterSingleForwardHelper::UpdateForwardingState(int64_t t) {
 
 }
 
+void ArbiterSingleForwardHelper::InitializeAccessibleNodes() {
+    // For each "relay GS" node, Round-robin find the top ANTENNA_COUNT_PER_GS satellites with the nearest distance and mark them as accessible
+    // Note that each satellite can only be connected to up to MAX_CONNECTION_PER_SAT ground stations, so we need to keep track of that as well
+
+    m_accessible_nodes.clear();
+
+    if (m_topology == nullptr) {
+        return;
+    }
+
+    uint32_t num_satellites = m_topology->GetNumSatellites();
+    uint32_t num_ground_stations = m_topology->GetNumGroundStations();
+    uint32_t relay_ground_station_count = std::min(
+            num_ground_stations,
+            static_cast<uint32_t>(RELAY_GROUND_STATION_COUNT)
+    );
+
+    auto isSatelliteNode = [&](int64_t node_id) {
+        return node_id >= 0
+               && static_cast<uint32_t>(node_id) < m_nodes.GetN()
+               && m_topology->IsSatelliteId(static_cast<uint32_t>(node_id));
+    };
+
+    auto getDistanceMeters = [&](int64_t node_a, int64_t node_b) {
+        NS_ABORT_MSG_IF(node_a < 0 || static_cast<uint32_t>(node_a) >= m_nodes.GetN(), "Invalid node A for accessibility distance");
+        NS_ABORT_MSG_IF(node_b < 0 || static_cast<uint32_t>(node_b) >= m_nodes.GetN(), "Invalid node B for accessibility distance");
+        Ptr<MobilityModel> mobility_a = m_nodes.Get(node_a)->GetObject<MobilityModel>();
+        Ptr<MobilityModel> mobility_b = m_nodes.Get(node_b)->GetObject<MobilityModel>();
+        NS_ABORT_MSG_UNLESS(mobility_a != nullptr && mobility_b != nullptr, "Missing mobility model for accessibility distance");
+        return mobility_a->GetDistanceFrom(mobility_b);
+    };
+
+    std::map<int64_t, std::vector<int64_t>> sorted_satellite_candidates;
+    std::map<int64_t, size_t> next_candidate_index;
+    std::map<int64_t, int32_t> gs_connection_count;
+    std::map<int64_t, int32_t> sat_connection_count;
+    std::vector<int64_t> relay_gs_node_ids;
+    relay_gs_node_ids.reserve(relay_ground_station_count);
+
+    for (uint32_t gs_local_id = 0; gs_local_id < relay_ground_station_count; ++gs_local_id) {
+        int64_t gs_node_id = static_cast<int64_t>(num_satellites + gs_local_id);
+
+        auto reachable_it = m_reachable_nodes.find(gs_node_id);
+        if (reachable_it == m_reachable_nodes.end()) {
+            continue;
+        }
+
+        std::vector<int64_t> candidates;
+        for (int64_t candidate_node_id : reachable_it->second) {
+            if (isSatelliteNode(candidate_node_id)) {
+                candidates.push_back(candidate_node_id);
+            }
+        }
+
+        if (candidates.empty()) {
+            continue;
+        }
+
+        std::sort(candidates.begin(), candidates.end(), [&](int64_t sat_a, int64_t sat_b) {
+            double dist_a = getDistanceMeters(gs_node_id, sat_a);
+            double dist_b = getDistanceMeters(gs_node_id, sat_b);
+            if (dist_a != dist_b) {
+                return dist_a < dist_b;
+            }
+            return sat_a < sat_b;
+        });
+
+        sorted_satellite_candidates[gs_node_id] = std::move(candidates);
+        next_candidate_index[gs_node_id] = 0;
+        gs_connection_count[gs_node_id] = 0;
+        relay_gs_node_ids.push_back(gs_node_id);
+    }
+
+    bool progress = true;
+    while (progress) {
+        progress = false;
+
+        for (int64_t gs_node_id : relay_gs_node_ids) {
+            if (gs_connection_count[gs_node_id] >= ANTENNA_COUNT_PER_GS) {
+                continue;
+            }
+
+            auto& candidates = sorted_satellite_candidates[gs_node_id];
+            size_t& candidate_index = next_candidate_index[gs_node_id];
+
+            while (candidate_index < candidates.size()) {
+                int64_t sat_node_id = candidates[candidate_index++];
+                if (sat_connection_count[sat_node_id] >= MAX_CONNECTION_PER_SAT) {
+                    continue;
+                }
+
+                bool inserted_gs = m_accessible_nodes[gs_node_id].insert(sat_node_id).second;
+                bool inserted_sat = m_accessible_nodes[sat_node_id].insert(gs_node_id).second;
+                if (inserted_gs && inserted_sat) {
+                    gs_connection_count[gs_node_id] += 1;
+                    sat_connection_count[sat_node_id] += 1;
+                    progress = true;
+                }
+                break;
+            }
+        }
+    }
+}
+
+void ArbiterSingleForwardHelper::UpdateAccessibleNodes(int64_t sat_node_id, int64_t relay_gs_node_id) {
+    if (m_topology == nullptr) {
+        return;
+    }
+
+    uint32_t num_satellites = m_topology->GetNumSatellites();
+
+    bool sat_is_valid = sat_node_id >= 0
+                        && static_cast<uint32_t>(sat_node_id) < m_nodes.GetN()
+                        && m_topology->IsSatelliteId(static_cast<uint32_t>(sat_node_id));
+    bool relay_gs_is_valid = relay_gs_node_id >= 0
+                             && static_cast<uint32_t>(relay_gs_node_id) < m_nodes.GetN()
+                             && m_topology->IsGroundStationId(static_cast<uint32_t>(relay_gs_node_id));
+    if (!sat_is_valid || !relay_gs_is_valid) {
+        return;
+    }
+
+    int64_t gs_local_id = relay_gs_node_id - static_cast<int64_t>(num_satellites);
+    if (gs_local_id < 0 || gs_local_id >= RELAY_GROUND_STATION_COUNT) {
+        return;
+    }
+
+    auto removeAccessibleLink = [&](int64_t sat_id, int64_t gs_id) {
+        auto gs_accessible_it = m_accessible_nodes.find(gs_id);
+        if (gs_accessible_it != m_accessible_nodes.end()) {
+            gs_accessible_it->second.erase(sat_id);
+            if (gs_accessible_it->second.empty()) {
+                m_accessible_nodes.erase(gs_accessible_it);
+            }
+        }
+
+        auto sat_accessible_it = m_accessible_nodes.find(sat_id);
+        if (sat_accessible_it != m_accessible_nodes.end()) {
+            sat_accessible_it->second.erase(gs_id);
+            if (sat_accessible_it->second.empty()) {
+                m_accessible_nodes.erase(sat_accessible_it);
+            }
+        }
+    };
+
+    auto hasAccessibleLink = [&](int64_t sat_id, int64_t gs_id) {
+        auto gs_it = m_accessible_nodes.find(gs_id);
+        return gs_it != m_accessible_nodes.end() && gs_it->second.count(sat_id) > 0;
+    };
+
+    auto getSatelliteConnectionCount = [&](int64_t sat_id) {
+        auto sat_it = m_accessible_nodes.find(sat_id);
+        if (sat_it == m_accessible_nodes.end()) {
+            return 0;
+        }
+        return static_cast<int32_t>(sat_it->second.size());
+    };
+
+    auto getGroundStationConnectionCount = [&](int64_t gs_id) {
+        auto gs_it = m_accessible_nodes.find(gs_id);
+        if (gs_it == m_accessible_nodes.end()) {
+            return 0;
+        }
+        return static_cast<int32_t>(gs_it->second.size());
+    };
+
+    auto addAccessibleLink = [&](int64_t sat_id, int64_t gs_id) {
+        bool inserted_gs = m_accessible_nodes[gs_id].insert(sat_id).second;
+        bool inserted_sat = m_accessible_nodes[sat_id].insert(gs_id).second;
+        if (!inserted_gs || !inserted_sat) {
+            m_accessible_nodes[gs_id].erase(sat_id);
+            m_accessible_nodes[sat_id].erase(gs_id);
+            if (m_accessible_nodes[gs_id].empty()) {
+                m_accessible_nodes.erase(gs_id);
+            }
+            if (m_accessible_nodes[sat_id].empty()) {
+                m_accessible_nodes.erase(sat_id);
+            }
+            return false;
+        }
+        return true;
+    };
+
+    auto sat_reachable_it = m_reachable_nodes.find(sat_node_id);
+    bool sat_to_relay_reachable = sat_reachable_it != m_reachable_nodes.end()
+                                  && sat_reachable_it->second.count(relay_gs_node_id) > 0;
+
+    auto getDistanceMeters = [&](int64_t node_a, int64_t node_b) {
+        NS_ABORT_MSG_IF(node_a < 0 || static_cast<uint32_t>(node_a) >= m_nodes.GetN(), "Invalid node A for accessibility distance");
+        NS_ABORT_MSG_IF(node_b < 0 || static_cast<uint32_t>(node_b) >= m_nodes.GetN(), "Invalid node B for accessibility distance");
+        Ptr<MobilityModel> mobility_a = m_nodes.Get(node_a)->GetObject<MobilityModel>();
+        Ptr<MobilityModel> mobility_b = m_nodes.Get(node_b)->GetObject<MobilityModel>();
+        NS_ABORT_MSG_UNLESS(mobility_a != nullptr && mobility_b != nullptr, "Missing mobility model for accessibility distance");
+        return mobility_a->GetDistanceFrom(mobility_b);
+    };
+
+    // Add event: sat<->relayGS is currently reachable
+    if (sat_to_relay_reachable) {
+        if (hasAccessibleLink(sat_node_id, relay_gs_node_id)) {
+            return;
+        }
+
+        int32_t sat_connections = getSatelliteConnectionCount(sat_node_id);
+        int32_t gs_connections = getGroundStationConnectionCount(relay_gs_node_id);
+
+        if (gs_connections < ANTENNA_COUNT_PER_GS && sat_connections < MAX_CONNECTION_PER_SAT) {
+            addAccessibleLink(sat_node_id, relay_gs_node_id);
+        }
+
+        return;
+    }
+
+    // Remove event: sat<->relayGS is no longer reachable
+    removeAccessibleLink(sat_node_id, relay_gs_node_id);
+
+    int32_t current_gs_connections = getGroundStationConnectionCount(relay_gs_node_id);
+    if (current_gs_connections >= ANTENNA_COUNT_PER_GS) {
+        return;
+    }
+
+    auto reachable_it = m_reachable_nodes.find(relay_gs_node_id);
+    if (reachable_it == m_reachable_nodes.end()) {
+        return;
+    }
+
+    std::vector<int64_t> candidates;
+    for (int64_t candidate_node_id : reachable_it->second) {
+        if (candidate_node_id >= 0
+            && static_cast<uint32_t>(candidate_node_id) < m_nodes.GetN()
+            && m_topology->IsSatelliteId(static_cast<uint32_t>(candidate_node_id))) {
+            candidates.push_back(candidate_node_id);
+        }
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [&](int64_t sat_a, int64_t sat_b) {
+        double dist_a = getDistanceMeters(relay_gs_node_id, sat_a);
+        double dist_b = getDistanceMeters(relay_gs_node_id, sat_b);
+        if (dist_a != dist_b) {
+            return dist_a < dist_b;
+        }
+        return sat_a < sat_b;
+    });
+
+    for (int64_t candidate_sat : candidates) {
+        if (current_gs_connections >= ANTENNA_COUNT_PER_GS) {
+            break;
+        }
+        if (hasAccessibleLink(candidate_sat, relay_gs_node_id)) {
+            continue;
+        }
+        if (getSatelliteConnectionCount(candidate_sat) >= MAX_CONNECTION_PER_SAT) {
+            continue;
+        }
+        if (addAccessibleLink(candidate_sat, relay_gs_node_id)) {
+            current_gs_connections += 1;
+        }
+    }
+}
+
 void ArbiterSingleForwardHelper::UpdateReachabilityState(int64_t current_node_id, int64_t target_node_id, bool is_direct_connection) {
     // Only track satellite ↔ ground station connections
     bool current_is_satellite = m_topology->IsSatelliteId(current_node_id);
@@ -247,16 +511,22 @@ void ArbiterSingleForwardHelper::UpdateReachabilityState(int64_t current_node_id
         // Add bidirectional connection
         m_reachable_nodes[current_node_id].insert(target_node_id);
         m_reachable_nodes[target_node_id].insert(current_node_id);
+
+        // Incrementally update accessibility assignment for add event
+        UpdateAccessibleNodes(current_node_id, target_node_id);
         
         // // Debug output
         // std::cout << "  > Added reachability: Satellite " << current_node_id 
         //           << " ↔ Ground Station " << target_node_id << std::endl;
     } else {
+        bool removed_reachability = false;
+
         // Remove bidirectional connection if it exists
         auto it_current = m_reachable_nodes.find(current_node_id);
         if (it_current != m_reachable_nodes.end()) {
             auto erased_current = it_current->second.erase(target_node_id);
             if (erased_current > 0) {
+                removed_reachability = true;
                 // Debug output only if we actually removed something
                 // std::cout << "  > Removed reachability: Satellite " << current_node_id 
                 //           << " ↔ Ground Station " << target_node_id << std::endl;
@@ -268,10 +538,18 @@ void ArbiterSingleForwardHelper::UpdateReachabilityState(int64_t current_node_id
         
         auto it_target = m_reachable_nodes.find(target_node_id);
         if (it_target != m_reachable_nodes.end()) {
-            it_target->second.erase(current_node_id);
+            auto erased_target = it_target->second.erase(current_node_id);
+            if (erased_target > 0) {
+                removed_reachability = true;
+            }
             if (it_target->second.empty()) {
                 m_reachable_nodes.erase(it_target);
             }
+        }
+
+        // Re-balance accessibility if a satellite-relay GS LOS reachability was actually removed
+        if (removed_reachability) {
+            UpdateAccessibleNodes(current_node_id, target_node_id);
         }
     }
 }
@@ -597,8 +875,8 @@ std::vector<std::pair<int32_t, double>> ArbiterSingleForwardHelper::GetNeighbors
         }
     }
 
-    auto it = m_reachable_nodes.find(node_id);
-    if (it != m_reachable_nodes.end()) {
+    auto it = m_accessible_nodes.find(node_id);
+    if (it != m_accessible_nodes.end()) {
         for (int64_t neighbor_id_64 : it->second) {
             int32_t neighbor_id = static_cast<int32_t>(neighbor_id_64);
 

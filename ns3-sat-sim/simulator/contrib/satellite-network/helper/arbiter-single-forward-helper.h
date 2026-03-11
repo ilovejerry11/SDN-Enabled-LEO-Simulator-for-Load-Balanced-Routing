@@ -51,10 +51,14 @@ namespace ns3 {
         static constexpr double COST_PARAM_GSL = 5.0;  // GSL utilization weight
         static constexpr double MAX_UTILIZATION = 0.99; // threshold for infinite cost
         static constexpr int32_t RELAY_GROUND_STATION_COUNT = 198;
+        static constexpr int32_t ANTENNA_COUNT_PER_GS = 8;
+        static constexpr int32_t MAX_CONNECTION_PER_SAT = 8;
 
         std::vector<std::map<std::pair<int32_t, int32_t>, std::tuple<int32_t, int32_t, int32_t>>> InitialEmptyForwardingState();
         void UpdateForwardingState(int64_t t);
         void UpdateReachabilityState(int64_t current_node_id, int64_t target_node_id, bool is_direct_connection);
+        void InitializeAccessibleNodes();
+        void UpdateAccessibleNodes(int64_t sat_node_id, int64_t relay_gs_node_id);
         std::pair<int64_t, int64_t> FindInterfaceIds(int64_t from_node_id, int64_t to_node_id);
         void SetupGroundStationRoute(uint32_t gs_a, uint32_t gs_b, const std::vector<int32_t>& sat_path);
         void SetupOptimalRoute(uint32_t gs_a, uint32_t gs_b);
@@ -83,8 +87,11 @@ namespace ns3 {
 
         Ptr<TopologySatelliteNetwork> m_topology; // For convenience, if needed
 
-        // Reachability tracking: maps node_id to set of reachable nodes
+        // Reachability tracking: maps sat/gs node_id to set of reachable gs/sat nodes
         std::map<int64_t, std::set<int64_t>> m_reachable_nodes;
+
+        // Accessible nodes tracking: maps sat/gs node_id to set of currently accessible gs/sat nodes (directly connected via GSL links)
+        std::map<int64_t, std::set<int64_t>> m_accessible_nodes;
 
         // On-demand flow tracking: GS pairs that have active flows
         std::set<std::pair<uint32_t, uint32_t>> m_active_gs_flows;

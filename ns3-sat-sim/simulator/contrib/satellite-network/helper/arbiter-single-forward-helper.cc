@@ -1100,22 +1100,46 @@ void ArbiterSingleForwardHelper::SetupOptimalRoute(uint32_t gs_a, uint32_t gs_b)
     uint32_t gs_a_node_id = num_satellites + gs_a;
     uint32_t gs_b_node_id = num_satellites + gs_b;
     
-    // Find reachable satellites for both ground stations
-    auto it_a = m_reachable_nodes.find(gs_a_node_id);
-    auto it_b = m_reachable_nodes.find(gs_b_node_id);
-    
-    if (it_a == m_reachable_nodes.end() || it_b == m_reachable_nodes.end() ||
-        it_a->second.empty() || it_b->second.empty()) {
+    // Find the single nearest reachable satellite for each ground station
+    auto findNearestSatellite = [&](uint32_t gs_node_id) -> int64_t {
+        auto it = m_reachable_nodes.find(gs_node_id);
+        if (it == m_reachable_nodes.end() || it->second.empty()) {
+            return -1;
+        }
+        Ptr<MobilityModel> gs_mobility = m_nodes.Get(gs_node_id)->GetObject<MobilityModel>();
+        int64_t nearest_sat = -1;
+        double nearest_dist = std::numeric_limits<double>::infinity();
+        for (int64_t candidate : it->second) {
+            if (!m_topology->IsSatelliteId(static_cast<uint32_t>(candidate))) {
+                continue;
+            }
+            Ptr<MobilityModel> sat_mobility = m_nodes.Get(candidate)->GetObject<MobilityModel>();
+            double dist = gs_mobility->GetDistanceFrom(sat_mobility);
+            if (dist < nearest_dist) {
+                nearest_dist = dist;
+                nearest_sat = candidate;
+            }
+        }
+        return nearest_sat;
+    };
+
+    int64_t nearest_sat_a = findNearestSatellite(gs_a_node_id);
+    int64_t nearest_sat_b = findNearestSatellite(gs_b_node_id);
+
+    if (nearest_sat_a == -1 || nearest_sat_b == -1) {
         // No reachable satellites for one or both ground stations
-        std::cout << "    >> WARNING: No reachable satellites for GS" << gs_a << " -> GS" << gs_b 
+        std::cout << "    >> WARNING: No reachable satellites for GS" << gs_a << " -> GS" << gs_b
                   << ", setting drop entry" << std::endl;
         m_arbiters.at(gs_a_node_id)->SetSingleForwardState(gs_a_node_id, gs_b_node_id, -1, -1, -1);
         return;
     }
-    
-    // Use multi-source Dijkstra to find optimal path
-    std::pair<std::vector<int32_t>, double> result = 
-        ComputeMultiSourceDijkstra(it_a->second, it_b->second);
+
+    std::set<int64_t> source_set = { nearest_sat_a };
+    std::set<int64_t> target_set = { nearest_sat_b };
+
+    // Use single-source Dijkstra seeded with the nearest satellite on each side
+    std::pair<std::vector<int32_t>, double> result =
+        ComputeMultiSourceDijkstra(source_set, target_set);
     
     std::vector<int32_t> path = result.first;
     double cost = result.second;

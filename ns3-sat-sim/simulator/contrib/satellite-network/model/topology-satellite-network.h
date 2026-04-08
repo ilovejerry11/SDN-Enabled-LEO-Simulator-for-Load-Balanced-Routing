@@ -57,8 +57,6 @@
 #include "ns3/gsl-net-device.h"
 #include "ns3/ipv4.h"
 
-#include "ns3/openflow-module.h"
-
 namespace ns3 {
 
     class TopologySatelliteNetwork : public Topology

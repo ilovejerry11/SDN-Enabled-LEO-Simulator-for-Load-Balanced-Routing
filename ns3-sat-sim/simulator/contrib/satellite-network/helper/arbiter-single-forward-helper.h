@@ -29,7 +29,6 @@
 #include <limits>
 
 #include "ns3/topology-satellite-network.h"
-#include "ns3/openflow-module.h"
 #include "ns3/point-to-point-laser-net-device.h"
 #include "ns3/point-to-point-laser-channel.h"
 #include "ns3/gsl-net-device.h"

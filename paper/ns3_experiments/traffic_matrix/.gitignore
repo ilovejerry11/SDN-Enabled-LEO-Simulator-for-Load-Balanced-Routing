@@ -4,3 +4,5 @@ runs*
 temp
 temp_runs*
 extra_satgenpy_analysis_data
+analysis_logs
+*.png
